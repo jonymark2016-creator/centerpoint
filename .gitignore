@@ -1,0 +1,4 @@
+__pycache__/
+dump/
+discount_seen.json
+discount_new_offers.log
