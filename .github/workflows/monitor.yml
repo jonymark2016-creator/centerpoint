@@ -1,0 +1,74 @@
+name: Discount monitor
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "scan = normal run, dump = only test whether the sites can be read"
+        default: "scan"
+        type: choice
+        options: [scan, dump]
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          sudo apt-get update -y && sudo apt-get install -y xvfb
+
+      - name: Restore state
+        uses: actions/cache@v4
+        with:
+          path: discount_seen.json
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Scan
+        if: ${{ github.event.inputs.mode != 'dump' }}
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: xvfb-run -a python discount_monitor.py
+
+      - name: Test only (dump page 1 of every site)
+        if: ${{ github.event.inputs.mode == 'dump' }}
+        run: xvfb-run -a python discount_monitor.py --dump
+
+      - name: Upload dump
+        if: ${{ github.event.inputs.mode == 'dump' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dump
+          path: dump/
+
+      - name: Publish results page
+        if: ${{ github.event.inputs.mode != 'dump' }}
+        run: |
+          git config user.name "monitor-bot"
+          git config user.email "monitor-bot@users.noreply.github.com"
+          git add docs
+          [ -f discount_found.json ] && git add discount_found.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "update offers"
+            git pull --rebase
+            git push
+          fi
